@@ -32,6 +32,7 @@
 #include <time.h>
 #include <wchar.h>
 #include <ctype.h>
+#include <sys/time.h>
 
 #include <glib.h>
 
@@ -51,7 +52,7 @@ struct fsync_files {
 static GList *fsync_data;
 
 
-static chain_file(struct fsync_process *proc, char *filename)
+static void chain_file(struct fsync_process *proc, char *filename)
 {
 	struct fsync_files *file;
 	GList *item;
@@ -75,7 +76,7 @@ static chain_file(struct fsync_process *proc, char *filename)
 	proc->files = g_list_append(proc->files, file);
 }
 
-static report_file(char *process, char *file)
+static void report_file(char *process, char *file)
 {
 	struct fsync_process *proc;
 	GList *item;
