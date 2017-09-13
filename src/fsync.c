@@ -34,35 +34,83 @@
 #include <ctype.h>
 #include <sys/time.h>
 
-#include <glib.h>
+#include <ccan/list/list.h>
+#include <ccan/intmap/intmap.h>
 
 #include "latencytop.h"
 
 struct fsync_process { 
 	char name[PATH_MAX];
 	int fsync_count;
-	GList *files;
+	struct list_node node;
+	struct list_head files;
 };
+
+struct list_head *list_sort_fsync_processes(struct list_head *head)
+{
+	SINTMAP(struct fsync_process *) _map, *map = &_map;
+	struct fsync_process *current, *next;
+	sintmap_index_t _index, *index = &_index;
+
+	sintmap_init(map);
+
+	list_for_each_safe(head, current, next, node) {
+		sintmap_add(map, current->fsync_count, current);
+		list_del(&current->node);
+	}
+
+	current = sintmap_first(map, index);
+	while (current) {
+		list_add_tail(head, &current->node);
+		current = sintmap_after(map, index);
+	}
+
+	sintmap_clear(map);
+
+	return head;
+}
 
 struct fsync_files {
 	char name[PATH_MAX];
 	int fsync_count;
+	struct list_node node;
 };
 
-static GList *fsync_data;
+static LIST_HEAD(_fsync_data);
+static struct list_head *fsync_data = &_fsync_data;
 
+struct list_head *list_sort_fsync_files(struct list_head *head)
+{
+	SINTMAP(struct fsync_files *) _map, *map = &_map;
+	struct fsync_files *current, *next;
+	sintmap_index_t _index, *index = &_index;
+
+	sintmap_init(map);
+
+	list_for_each_safe(head, current, next, node) {
+		sintmap_add(map, current->fsync_count, current);
+		list_del(&current->node);
+	}
+
+	current = sintmap_first(map, index);
+	while (current) {
+		list_add_tail(head, &current->node);
+		current = sintmap_after(map, index);
+	}
+
+	sintmap_clear(map);
+
+	return head;
+}
 
 static void chain_file(struct fsync_process *proc, char *filename)
 {
 	struct fsync_files *file;
-	GList *item;
 
 	proc->fsync_count++;
-	item = proc->files;
-	while (item) {
-		file = item->data;
-		item = g_list_next(item);
-		if (strcmp(file->name, filename)==0) {
+
+	list_for_each(&proc->files, file, node) {
+		if (strcmp(file->name, filename) == 0) {
 			file->fsync_count++;
 			return;
 		}
@@ -73,18 +121,14 @@ static void chain_file(struct fsync_process *proc, char *filename)
 	memset(file, 0, sizeof(struct fsync_files));
 	strncpy(file->name, filename, PATH_MAX-1);
 	file->fsync_count = 1;
-	proc->files = g_list_append(proc->files, file);
+	list_add_tail(&proc->files, &file->node);
 }
 
 static void report_file(char *process, char *file)
 {
 	struct fsync_process *proc;
-	GList *item;
 
-	item = fsync_data;
-	while (item) {
-		proc = item->data;
-		item = g_list_next(item);
+	list_for_each(fsync_data, proc, node) {
 		if (strcmp(proc->name, process) == 0) {
 			chain_file(proc, file);
 			return;
@@ -97,37 +141,19 @@ static void report_file(char *process, char *file)
 	memset(proc, 0, sizeof(struct fsync_process));
 	strncpy(proc->name, process, PATH_MAX-1);
 	chain_file(proc, file);
-	fsync_data = g_list_append(fsync_data, proc);
-}
-
-static gint sort_files(gconstpointer A, gconstpointer B)
-{
-	struct fsync_files *a = (struct fsync_files *)A;
-	struct fsync_files *b = (struct fsync_files *)B;
-	return a->fsync_count < b->fsync_count;
-}
-
-static gint sort_process(gconstpointer A, gconstpointer B)
-{
-	struct fsync_process *a = (struct fsync_process *)A;
-	struct fsync_process *b = (struct fsync_process *)B;
-	return a->fsync_count < b->fsync_count;
+	list_head_init(&proc->files);
+	list_add_tail(fsync_data, &proc->node);
 }
 
 static void sort_the_lot(void)
 {
-	GList *item;
 	struct fsync_process *proc;
 
-	item = fsync_data = g_list_sort(fsync_data, sort_process);
-	while (item) {
-		proc = item->data;
-		item = g_list_next(item);
-		proc->files = g_list_sort(proc->files, sort_files);
+	fsync_data = list_sort_fsync_processes(fsync_data);
+	list_for_each(fsync_data, proc, node) {
+		list_sort_fsync_files(&proc->files);
 	}
 }
-
-
 
 static void write_to_file(char *filename, char *value)
 {
@@ -246,7 +272,6 @@ static void show_title_bar(void)
 
 static void print_global_list(void)
 {
-	GList *item, *item2;
 	struct fsync_process *proc;
 	struct fsync_files *file;
 	int i = 1, i2 = 0;
@@ -254,19 +279,14 @@ static void print_global_list(void)
 
 	werase(global_window);
 
-
 	mvwprintw(global_window, 0, 0, "Process        File");
-	item = g_list_first(fsync_data);
-	while (item && i < maxy-6) {
-		proc = item->data;
-		item = g_list_next(item);
-		
+	list_for_each(fsync_data, proc, node) {
+		if (i >= (maxy - 6))
+			break;
+
 		mvwprintw(global_window, y, 0, "%s (%i)", proc->name, proc->fsync_count);
 		y++;
-		item2 = proc->files;
-		while (item2 && i2 < 5) {
-			file = item2->data;
-			item2 = g_list_next(item2);
+		list_for_each(&proc->files, file, node) {
 			mvwprintw(global_window, y, 10, "%s (%i)", file->name, file->fsync_count);
 			y++;
 			i2++;
@@ -274,8 +294,8 @@ static void print_global_list(void)
 		i++;
 		y++;
 	}
-	wrefresh(global_window);
 
+	wrefresh(global_window);
 }
 
 static void parse_ftrace(void)

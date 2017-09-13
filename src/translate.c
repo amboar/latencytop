@@ -30,27 +30,27 @@
 #include <string.h>
 #include <time.h>
 
-#include <glib.h>
+#include <ccan/list/list.h>
 
 #include "latencytop.h"
-
 
 /* translate kernel output to human readable */
 struct translate_line {
 	int priority;
 	char function[200];
 	char display[200];	
+	struct list_node node;
 };
 
 
-GList *translations;
+LIST_HEAD(_translations);
+struct list_head *translations = &_translations;
 
 char *translate(char *line)
 {
 	char buffer[4096], *c, *c2;
 	int prio = 0;
 	char *selected = NULL;
-	GList *item;
 	struct translate_line *trans;
 
 	memset(buffer, 0, 4096);	
@@ -64,10 +64,7 @@ char *translate(char *line)
 		c = strchr(c2, ' ');
 		if (c) *c = 0;
 
-		item = g_list_first(translations);
-		while (item) {
-			trans = item->data;
-			item = g_list_next(item);
+		list_for_each(translations, trans, node) {
 			if (trans->priority >= prio && strcmp(trans->function, c2)==0) {
 				selected = trans->display;
 				prio = trans->priority;
@@ -131,7 +128,7 @@ void init_translations(char *filename)
 		}
 		while (*c2=='\t') c2++;
 		strcpy(trans->display, c2);
-		translations = g_list_append(translations, trans);
+		list_add_tail(translations, &trans->node);
 		free(line);
 	}
 	fclose(file);

@@ -1,5 +1,7 @@
 #define VERSION "0.5"
 
+#include <ccan/list/list.h>
+
 struct latency_line;
 
 struct latency_line {
@@ -8,6 +10,7 @@ struct latency_line {
 	int count;
 	double time;
 	double max;
+	struct list_node node;
 };
 
 struct process {
@@ -15,7 +18,8 @@ struct process {
 	int kernelthread;
 	char name[64];
 	unsigned int max;
-	GList *latencies;
+	struct list_node node;
+	struct list_head latencies;
 	int used;
 	int exists;
 	int pinned;
@@ -25,9 +29,9 @@ struct process {
         int delaycount;
 };
 
-extern GList *lines;
-extern GList *procs;
-extern GList *translations;
+extern struct list_head *lines;
+extern struct list_head *procs;
+extern struct list_head *translations;
 extern int total_time;
 extern int total_count;
 

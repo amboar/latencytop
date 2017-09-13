@@ -31,14 +31,17 @@
 #include <sys/types.h>
 #include <dirent.h>
 
-#include <glib.h>
-
 #include "latencytop.h"
 
-GList *lines;
+LIST_HEAD(_lines);
+struct list_head *lines = &_lines;
 
-GList *procs;
-GList *allprocs;
+LIST_HEAD(_procs);
+struct list_head *procs = &_procs;
+
+LIST_HEAD(_allprocs);
+struct list_head *allprocs = &_allprocs;
+
 int total_time = 0;
 int total_count = 0;
 
@@ -52,12 +55,9 @@ char *prefered_process;
 
 static void add_to_global(struct latency_line *line)
 {
-	GList *item;
 	struct latency_line *line2;
-	item = g_list_first(lines);
-	while (item) {
-		line2 = item->data;
-		item = g_list_next(item);
+
+	list_for_each(lines, line2, node) {
 		if (strcmp(line->reason, line2->reason)==0) {
 			line2->count += line->count;
 			line2->time += line->time;
@@ -67,17 +67,15 @@ static void add_to_global(struct latency_line *line)
 			return;
 		}
 	}
-	lines = g_list_append(lines, line);
+
+	list_add_tail(lines, &line->node);
 }
 
 static void add_to_process(struct process *process, struct latency_line *line)
 {
-	GList *item;
 	struct latency_line *line2;
-	item = g_list_first(process->latencies);
-	while (item) {
-		line2 = item->data;
-		item = g_list_next(item);
+
+	list_for_each(&process->latencies, line2, node) {
 		if (strcmp(line->reason, line2->reason)==0) {
 			line2->count += line->count;
 			line2->time += line->time;
@@ -87,7 +85,8 @@ static void add_to_process(struct process *process, struct latency_line *line)
 			return;
 		}
 	}
-	process->latencies = g_list_append(process->latencies, line);
+
+	list_add_tail(&process->latencies, &line->node);
 }
 
 static void fixup_reason(struct latency_line *line, char *c)
@@ -163,6 +162,7 @@ void parse_global_list(void)
 	fclose(file);
 }
 
+#if 0
 gint comparef(gconstpointer A, gconstpointer B)
 {
 	struct latency_line *a, *b;
@@ -178,18 +178,18 @@ gint comparef(gconstpointer A, gconstpointer B)
 		return 1;
 	return -1;
 }
+#endif
 
 void sort_list(void)
 {
-	GList *entry;
 	struct latency_line *line;
 
 	total_time = 0;
+#if 0 /* We need to sort this shit somehow */
 	lines = g_list_sort(lines, comparef);
-	entry = g_list_first(lines);
-	while (entry) {
-		line = entry->data;
-		entry = g_list_next(entry);
+#endif
+
+	list_for_each(lines, line, node) {
 		total_time = total_time + line->time;
 	}
 }
@@ -197,62 +197,47 @@ void sort_list(void)
 
 void delete_list(void)
 {
-	GList *entry, *entry2,*next;
-	struct latency_line *line;
-	struct process *proc;
+	struct latency_line *lcurrent = NULL, *lnext = NULL;
+	struct process *pcurrent, *pnext;
 
-	while (lines) {
-		entry = g_list_first(lines);
-		line = entry->data;
-		free(line);
-		lines = g_list_delete_link(lines, entry);
-	}
-	entry = g_list_first(allprocs);
-	while (entry) {
-		next = g_list_next(entry);
-		proc = entry->data;
-		while (proc->latencies) {
-			entry2 = g_list_first(proc->latencies);
-			line = entry2->data;
-			free(line);
-			proc->latencies = g_list_delete_link(proc->latencies, entry2);
+	if (!list_empty(lines)) {
+		list_for_each_safe(lines, lcurrent, lnext, node) {
+			list_del(&lcurrent->node);
+			free(lcurrent);
 		}
-		proc->max = 0;
-		if (!proc->exists && !proc->pinned) {
-			free(proc);
-			allprocs = g_list_delete_link(allprocs, entry);
-		}
-		entry = next;
 	}
-	g_list_free(procs);
-	procs = NULL;
+
+	list_for_each_safe(allprocs, pcurrent, pnext, node) {
+		list_for_each_safe(&pcurrent->latencies, lcurrent, lnext, node) {
+			list_del(&lcurrent->node);
+			free(lcurrent);
+		}
+
+		pcurrent->max = 0;
+		if (!pcurrent->exists && !pcurrent->pinned) {
+			list_del(&pcurrent->node);
+			free(pcurrent);
+		}
+	}
 }
 
 void prune_unused_procs(void)
 {
-	GList *entry, *entry2;
-	struct latency_line *line;
-	struct process *proc;
+	struct latency_line *lcurrent, *lnext;
+	struct process *pcurrent, *pnext;
 
-	entry = g_list_first(procs);
-	while (entry) {
-		proc = entry->data;
-		entry2 = g_list_next(entry);
-		if (!proc->used && !proc->pinned) {
-			while (proc->latencies) {
-				entry2 = g_list_first(proc->latencies);
-				line = entry2->data;
-				free(line);
-				proc->latencies = g_list_delete_link(proc->latencies, entry2);
+	list_for_each_safe(procs, pcurrent, pnext, node) {
+		if (!pcurrent->used && !pcurrent->pinned) {
+			list_for_each_safe(&pcurrent->latencies, lcurrent,
+					   lnext, node) {
+				list_del(&lcurrent->node);
+				free(lcurrent);
 			}
-			free(proc);
-			procs = g_list_delete_link(procs, entry);
+			list_del(&pcurrent->node);
+			free(pcurrent);
 		}
-		entry = entry2;
 	}
 }
-
-
 
 void parse_process(struct process *process)
 {
@@ -261,7 +246,6 @@ void parse_process(struct process *process)
 	char filename[PATH_MAX];
 
 	sprintf(filename, "/proc/%i/task/", process->pid);
-
 
 	dir = opendir(filename);
 	if (!dir)
@@ -348,21 +332,19 @@ void parse_process(struct process *process)
 
 struct process* find_create_process(unsigned int pid)
 {
-	GList *entry;
 	struct process *proc;
 
-	entry = g_list_first(allprocs);
-	while (entry) {
-		proc = entry->data;
+	list_for_each(allprocs, proc, node) {
 		if (proc->pid == pid) {
 			return proc;
 		}
-		entry = g_list_next(entry);
 	}
+
 	proc = malloc(sizeof(struct process));
 	memset(proc, 0, sizeof(struct process));
 	proc->pid = pid;
-	allprocs = g_list_append(allprocs, proc);
+	list_head_init(&proc->latencies);
+	list_add_tail(allprocs, &proc->node);
 
 	return proc;
 }
@@ -463,14 +445,17 @@ void parse_processes(void)
 		parse_process(process);
 
 		/* If process is pinned, we always add it to the list */
-		if (process->latencies)
+		if (!list_empty(&process->latencies)) {
+#if 0 /* Need to sort this somehow */
 			process->latencies = g_list_sort(process->latencies, comparef);
-		if (process->latencies || process->pinned) {
+#endif
+		}
+		if (!list_empty(&process->latencies) || process->pinned) {
 			if (!process->kernelthread && pidmax < process->max) {	
 				pidmax = process->max;
 				pid_with_max = process->pid;
 			}
-			procs = g_list_append(procs, process);
+			list_add_tail(procs, &process->node);
 		};
 	}
 	closedir(dir);
@@ -479,22 +464,15 @@ void parse_processes(void)
 
 void dump_global_to_console(void)
 {
-	GList *item;
 	struct latency_line *line;
-	int i = 0;
 
-	item = g_list_first(lines);
-	while (item) {
-		line = item->data;
-		item = g_list_next(item);
+	list_for_each(lines, line, node) {
 		printf( "[max %4.1fmsec] %40s - %5.2f msec (%3.1f%%)\n",
 			line->max * 0.001,
 			line->reason,
 			(line->time * 0.001 +0.0001) / line->count,
 			line->time * 100.0 /  total_time );
-		i++;
 	}
-
 }
 
 static void enable_sysctl(void)
